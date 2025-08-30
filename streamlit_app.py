@@ -3,13 +3,71 @@ import re
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Orbico Invoice → Excel", layout="centered")
-st.title("Orbico Invoice → Excel")
-st.caption("Drag & drop a PDF invoice. We'll extract line items and compute 'Stvarna količina (kom)' using L/KG rules.")
+# ---------- Page setup ----------
+st.set_page_config(
+    page_title="Orbico Invoice → Excel",
+    page_icon="📊",
+    layout="wide"
+)
 
+# ---- Optional logo (put a file named 'logo.png' in the repo root) ----
+logo_col, title_col = st.columns([1, 6], gap="small")
+with logo_col:
+    try:
+        st.image("logo.png", width=72)  # replace with your company logo file
+    except Exception:
+        st.write("")  # no logo, ignore
+
+with title_col:
+    st.markdown(
+        "<h1 style='margin-bottom:0.25rem;'>Orbico Invoice → Excel</h1>"
+        "<p style='color:#5b6b7a;margin-top:0;'>Upload a PDF invoice to extract line items and compute "
+        "<strong>Stvarna količina (kom)</strong> using L/KG rules.</p>",
+        unsafe_allow_html=True,
+    )
+
+# ---------- Light CSS polish ----------
+st.markdown(
+    """
+    <style>
+      /* tighter default spacing & smoother cards */
+      .block-container {padding-top: 2rem; padding-bottom: 2.5rem; max-width: 1100px;}
+      .stDownloadButton button, .stButton button { border-radius: 10px; padding: 0.6rem 1rem; }
+      .stAlert { border-radius: 10px; }
+      .app-card {
+        border: 1px solid #e8edf3;
+        border-radius: 14px;
+        padding: 1rem 1.25rem;
+        background: #fff;
+        box-shadow: 0 1px 2px rgba(16,24,40,.04);
+      }
+      .muted { color:#6b7a8c; font-size:0.925rem; }
+      .rule { color:#0f172a; background:#f1f5f9; padding:.25rem .5rem; border-radius:.5rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ---------- Sidebar: How it works ----------
+with st.sidebar:
+    st.markdown("### How it works")
+    st.markdown(
+        "- **AxB(Unit)** → we use **B** (e.g., `4X4L` → 4 L per bottle; `12X0,4KG` → 0.4 KG)\n"
+        "- Otherwise we use the **last** standalone number+unit (e.g., `… 55L` → 55 L)\n"
+        "- Supports **L** and **KG**\n"
+        "- Avoids false matches like `R4 L`",
+    )
+    st.markdown("---")
+    round_opt = st.checkbox("Round 'Stvarna količina (kom)' to whole numbers", value=False)
+    use_alt = st.checkbox("Try alternate parsing strategies", value=True)
+
+# ---------- File uploader card ----------
+st.markdown("<div class='app-card'>", unsafe_allow_html=True)
 uploaded = st.file_uploader("Drop your PDF here", type=["pdf"])
-use_alt = st.checkbox("Try alternate parsing strategies", value=True)
+st.caption("Tip: you can also click **Browse files** and choose a PDF from your computer.")
+st.markdown("</div>", unsafe_allow_html=True)
 
+# ---------- Helpers (same logic as before) ----------
 def to_float(s: str):
     if s is None:
         return None
@@ -25,7 +83,7 @@ def to_float(s: str):
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     text = ""
-    # Try pdfplumber
+    # Prefer pdfplumber for better layout extraction
     try:
         import pdfplumber
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
@@ -107,7 +165,6 @@ def parse_with_tables(file_bytes: bytes):
                         def is_numlike(x):
                             x = (x or "").replace(" ", "")
                             return bool(re.match(r"^[\d\.,-]+$", x))
-                        # gather numeric tail
                         tail = []
                         for c in reversed(cells):
                             if is_numlike(c):
@@ -153,7 +210,7 @@ def extract_denominator(name: str):
         val = float(m.group(2))
         unit = "KG" if "G" in m.group(3).upper() else "L"
         return val, unit
-    # Else use last standalone number+unit
+    # Else last standalone number+unit
     tokens = list(re.finditer(r"(?<![A-Za-z])(\d+(?:\.\d+)?)\s*(l|L|kg|KG|Kg|kG)\b", n))
     if tokens:
         last = tokens[-1]
@@ -175,12 +232,12 @@ def compute_real_qty(df: pd.DataFrame, round_qty: bool):
     df["Stvarna količina (kom)"] = df.apply(real_qty, axis=1)
     return df
 
+# ---------- Main flow ----------
 if uploaded is not None:
     file_bytes = uploaded.read()
-    with st.spinner("Reading PDF..."):
+    with st.spinner("Reading PDF…"):
         text = extract_text_from_pdf(file_bytes)
 
-    # Try multiple strategies
     rows = parse_lines_simple(text)
     if not rows and use_alt:
         rows = parse_lines_between_markers(text)
@@ -188,19 +245,18 @@ if uploaded is not None:
         rows = parse_with_tables(file_bytes)
 
     if not rows:
-        st.warning("No line items found. Try ticking 'Try alternate parsing strategies'.")
+        st.warning("No line items found. Try keeping **Try alternate parsing strategies** enabled. If it still fails, share the Debug preview with us.")
         with st.expander("Debug: raw text preview (first 1500 chars)"):
             st.code(text[:1500] if text else "(no text extracted)")
     else:
         df = pd.DataFrame(rows)
         df = df.sort_values("Br").reset_index(drop=True) if "Br" in df.columns else df.reset_index(drop=True)
-        round_opt = st.checkbox("Round 'Stvarna količina (kom)' to whole numbers", value=False)
+
+        st.markdown("### Preview")
         df = compute_real_qty(df, round_qty=round_opt)
+        st.dataframe(df.head(60), use_container_width=True)
 
-        st.subheader("Preview")
-        st.dataframe(df.head(50), use_container_width=True)
-
-        # Build Excel in-memory
+        # Excel export
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
             cols = [
@@ -213,8 +269,13 @@ if uploaded is not None:
         output.seek(0)
 
         st.download_button(
-            label="Download Excel",
+            "⬇️ Download Excel",
             data=output,
             file_name="invoice_extracted.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
         )
+
+# Footer note
+st.markdown("<p class='muted' style='margin-top:2rem;'>Need tweaks (extra columns, rounding rules, categories)? Ping me and I’ll update the app.</p>", unsafe_allow_html=True)
+UI update: header, logo support, theme
