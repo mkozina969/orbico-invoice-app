@@ -278,4 +278,4 @@ if uploaded is not None:
 
 # Footer note
 st.markdown("<p class='muted' style='margin-top:2rem;'>Need tweaks (extra columns, rounding rules, categories)? Ping me and I’ll update the app.</p>", unsafe_allow_html=True)
-UI update: header, logo support, theme
+
